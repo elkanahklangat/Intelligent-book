@@ -8,13 +8,15 @@ export interface FounderProfile {
   goals: string;
   createdAt: string;
   lastActiveAt: string;
+  favoriteChapterIds: string[];
+  noteSummaries: string[];
 }
 
 const PROFILE_STORAGE_KEY = 'startup_ebook_founder_profile_v1';
 
-export function createFounderProfile(overrides: Partial<FounderProfile> = {}): FounderProfile {
+export function normalizeFounderProfile(profile?: Partial<FounderProfile> | null): FounderProfile {
   const now = new Date().toISOString();
-  return {
+  const base: FounderProfile = {
     uid: `founder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     displayName: 'Founder',
     email: 'founder@offline.local',
@@ -24,8 +26,21 @@ export function createFounderProfile(overrides: Partial<FounderProfile> = {}): F
     goals: 'Validate the problem, build the MVP, and reach repeatable traction.',
     createdAt: now,
     lastActiveAt: now,
-    ...overrides
+    favoriteChapterIds: [],
+    noteSummaries: []
   };
+
+  return {
+    ...base,
+    ...profile,
+    favoriteChapterIds: Array.from(new Set(profile?.favoriteChapterIds ?? base.favoriteChapterIds ?? [])),
+    noteSummaries: Array.from(new Set(profile?.noteSummaries ?? base.noteSummaries ?? [])),
+    lastActiveAt: new Date().toISOString()
+  };
+}
+
+export function createFounderProfile(overrides: Partial<FounderProfile> = {}): FounderProfile {
+  return normalizeFounderProfile(overrides);
 }
 
 export function getFounderProfile(): FounderProfile | null {
@@ -34,25 +49,19 @@ export function getFounderProfile(): FounderProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as FounderProfile;
     if (!parsed || !parsed.uid) return null;
-    return parsed;
+    return normalizeFounderProfile(parsed);
   } catch {
     return null;
   }
 }
 
 export function saveFounderProfile(profile: FounderProfile): FounderProfile {
-  const normalized = {
-    ...createFounderProfile(),
-    ...profile,
-    lastActiveAt: new Date().toISOString()
-  };
-
+  const normalized = normalizeFounderProfile(profile);
   try {
     localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(normalized));
   } catch (error) {
     console.warn('Unable to save founder profile offline:', error);
   }
-
   return normalized;
 }
 
@@ -67,7 +76,7 @@ export function clearFounderProfile(): void {
 export function downloadFounderProfile(profile: FounderProfile): void {
   const payload = {
     exportedAt: new Date().toISOString(),
-    founder: profile
+    founder: normalizeFounderProfile(profile)
   };
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -79,4 +88,16 @@ export function downloadFounderProfile(profile: FounderProfile): void {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+export function importFounderProfileFromJSON(rawText: string): FounderProfile | null {
+  try {
+    const parsed = JSON.parse(rawText);
+    const candidate = parsed?.founder ?? parsed;
+    if (!candidate || !candidate.uid) return null;
+    return normalizeFounderProfile(candidate);
+  } catch (error) {
+    console.warn('Unable to import founder profile backup:', error);
+    return null;
+  }
 }
