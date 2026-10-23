@@ -1,0 +1,18 @@
+[build]
+  command = "bun run build:web"
+  publish = "dist"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Single-page app: serve index.html for client-side routes.
+# API routes are handled by Netlify Functions, which take precedence.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[dev]
+  framework = "#custom"
+  command = "npx vite --port 5173"
+  targetPort = 5173
