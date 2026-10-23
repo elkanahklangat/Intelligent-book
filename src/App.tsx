@@ -25,8 +25,8 @@ import { GoogleDriveHubModal } from './components/GoogleDriveHubModal';
 import { ValidationChecklistModal } from './components/ValidationChecklistModal';
 import { CaseStudiesModal } from './components/CaseStudiesModal';
 import { UserStatsModal } from './components/UserStatsModal';
+import { FounderProfileModal } from './components/FounderProfileModal';
 
-// Firebase Auth & Firestore Realtime Integration
 import { User, onAuthStateChanged } from 'firebase/auth';
 import {
   auth,
@@ -40,6 +40,13 @@ import {
   subscribeToUserProgress,
   saveProgressToFirestore
 } from './services/firebase';
+import {
+  FounderProfile,
+  clearFounderProfile,
+  createFounderProfile,
+  getFounderProfile,
+  saveFounderProfile
+} from './services/offlineProfile';
 
 const STORAGE_KEYS = {
   PREFS: 'startup_ebook_preferences_v1',
@@ -71,7 +78,6 @@ const DEFAULT_STATS: UserStats = {
 };
 
 export default function App() {
-  // State initialization with localStorage recovery
   const [currentChapterId, setCurrentChapterId] = useState<string>(() => {
     try {
       return localStorage.getItem(STORAGE_KEYS.CURRENT_CHAPTER) || CHAPTERS[0].id;
@@ -118,10 +124,10 @@ export default function App() {
     }
   });
 
-  // Firebase Authentication & Firestore Sync State
+  const [founderProfile, setFounderProfile] = useState<FounderProfile | null>(() => getFounderProfile());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isFounderProfileOpen, setIsFounderProfileOpen] = useState<boolean>(false);
 
-  // UI Modal / Drawer States
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isNotesOpen, setIsNotesOpen] = useState<boolean>(false);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
@@ -133,12 +139,45 @@ export default function App() {
   const [isStatsOpen, setIsStatsOpen] = useState<boolean>(false);
   const [currentAudioParagraphIndex, setCurrentAudioParagraphIndex] = useState<number>(0);
 
-  // Test Firestore Connection & Listen to Auth State
+  const effectiveUser = useMemo(() => {
+    if (currentUser) {
+      return currentUser;
+    }
+
+    if (!founderProfile) {
+      return null;
+    }
+
+    return {
+      uid: founderProfile.uid,
+      email: founderProfile.email || 'founder@offline.local',
+      displayName: founderProfile.displayName || founderProfile.startupName || 'Founder',
+      photoURL: ''
+    } as any;
+  }, [currentUser, founderProfile]);
+
+  useEffect(() => {
+    try {
+      if (founderProfile) {
+        saveFounderProfile(founderProfile);
+      } else {
+        clearFounderProfile();
+      }
+    } catch {
+      // ignore storage issues in restricted browser contexts
+    }
+  }, [founderProfile]);
+
   useEffect(() => {
     testFirestoreConnection();
 
     let unsubscribeHighlights: (() => void) | null = null;
     let unsubscribeProgress: (() => void) | null = null;
+
+    if (!auth) {
+      setCurrentUser(null);
+      return () => {};
+    }
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
@@ -146,14 +185,12 @@ export default function App() {
       if (user) {
         syncUserProfile(user);
 
-        // Realtime Firestore sync for Highlights & Notes
         unsubscribeHighlights = subscribeToUserHighlights(user.uid, (firestoreHighlights) => {
           if (firestoreHighlights && firestoreHighlights.length > 0) {
             setHighlights(firestoreHighlights);
           }
         });
 
-        // Realtime Firestore sync for Completed Chapters
         unsubscribeProgress = subscribeToUserProgress(user.uid, (completedChapterIds) => {
           if (completedChapterIds && completedChapterIds.length > 0) {
             setUserStats(prev => ({
@@ -172,7 +209,6 @@ export default function App() {
     };
   }, []);
 
-  // Sync current chapter to storage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.CURRENT_CHAPTER, currentChapterId);
@@ -183,7 +219,6 @@ export default function App() {
     setCurrentAudioParagraphIndex(0);
   }, [currentChapterId]);
 
-  // Sync preferences
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.PREFS, JSON.stringify(preferences));
@@ -192,7 +227,6 @@ export default function App() {
     }
   }, [preferences]);
 
-  // Sync highlights
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.HIGHLIGHTS, JSON.stringify(highlights));
@@ -201,7 +235,6 @@ export default function App() {
     }
   }, [highlights]);
 
-  // Sync validation checklist
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.CHECKLIST, JSON.stringify(checklist));
@@ -210,7 +243,6 @@ export default function App() {
     }
   }, [checklist]);
 
-  // Sync user stats
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(userStats));
@@ -219,7 +251,6 @@ export default function App() {
     }
   }, [userStats]);
 
-  // Reading time counter & Day rollover tracker
   useEffect(() => {
     const timer = setInterval(() => {
       setUserStats(prev => {
@@ -259,7 +290,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Keyboard shortcut listener (Cmd+K / Ctrl+K for search)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -274,13 +304,13 @@ export default function App() {
         setIsChecklistOpen(false);
         setIsCaseStudiesOpen(false);
         setIsStatsOpen(false);
+        setIsFounderProfileOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Sync document root classes & data-theme for Tailwind dark mode and global contrast
   useEffect(() => {
     const isDark = preferences.theme === 'deepblue' || preferences.theme === 'dark' || preferences.theme === 'midnight';
     if (isDark) {
@@ -291,7 +321,6 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', preferences.theme);
   }, [preferences.theme]);
 
-  // Current Chapter calculations
   const currentChapterIndex = useMemo(() => {
     const idx = CHAPTERS.findIndex(c => c.id === currentChapterId);
     return idx !== -1 ? idx : 0;
@@ -301,7 +330,6 @@ export default function App() {
   const previousChapter = currentChapterIndex > 0 ? CHAPTERS[currentChapterIndex - 1] : null;
   const nextChapter = currentChapterIndex < CHAPTERS.length - 1 ? CHAPTERS[currentChapterIndex + 1] : null;
 
-  // Extract all paragraphs in the current chapter for the Audio Narrator
   const allParagraphsInCurrentChapter = useMemo(() => {
     const list: string[] = [];
     currentChapter.sections.forEach(sec => {
@@ -310,22 +338,32 @@ export default function App() {
     return list;
   }, [currentChapter]);
 
-  // Handlers
   const handleUpdatePreferences = (updated: Partial<ReadingPreferences>) => {
     setPreferences(prev => ({ ...prev, ...updated }));
   };
 
   const handleSignIn = async () => {
     try {
+      if (!auth) {
+        setIsFounderProfileOpen(true);
+        return;
+      }
+
       await signInWithGoogle();
     } catch (err) {
       console.warn('Google sign-in cancelled or failed:', err);
+      setIsFounderProfileOpen(true);
     }
   };
 
   const handleSignOutUser = async () => {
     try {
-      await logOut();
+      if (currentUser) {
+        await logOut();
+      }
+      setCurrentUser(null);
+      setFounderProfile(null);
+      clearFounderProfile();
     } catch (err) {
       console.warn('Sign out error:', err);
     }
@@ -339,7 +377,6 @@ export default function App() {
     };
     setHighlights(prev => [newItem, ...prev]);
 
-    // Firestore persistence
     if (currentUser) {
       saveHighlightToFirestore(currentUser.uid, newItem);
     }
@@ -348,7 +385,6 @@ export default function App() {
   const handleDeleteHighlight = (id: string) => {
     setHighlights(prev => prev.filter(h => h.id !== id));
 
-    // Firestore persistence
     if (currentUser) {
       removeHighlightFromFirestore(currentUser.uid, id);
     }
@@ -379,7 +415,6 @@ export default function App() {
         ? prev.completedChapters.filter(id => id !== chapterId)
         : [...prev.completedChapters, chapterId];
 
-      // Firestore persistence
       if (currentUser) {
         saveProgressToFirestore(currentUser.uid, chapterId, !isAlready);
       }
@@ -402,7 +437,6 @@ export default function App() {
     }));
   };
 
-  // Determine theme class
   const themeClass = preferences.theme === 'deepblue'
     ? 'theme-deepblue dark bg-[#070d1e] text-white'
     : preferences.theme === 'sepia'
@@ -415,7 +449,6 @@ export default function App() {
 
   return (
     <div id="startup-ebook-app-root" className={`min-h-screen flex flex-col transition-colors duration-200 ${themeClass}`}>
-      {/* Global Header */}
       <Header
         chapterTitle={currentChapter.title}
         chapterNumber={currentChapter.number}
@@ -434,14 +467,12 @@ export default function App() {
         onOpenCaseStudies={() => setIsCaseStudiesOpen(true)}
         onOpenStats={() => setIsStatsOpen(true)}
         notesCount={highlights.length}
-        currentUser={currentUser}
+        currentUser={effectiveUser as any}
         onSignInWithGoogle={handleSignIn}
         onSignOut={handleSignOutUser}
       />
 
-      {/* Main Layout Container */}
       <div className="flex-1 flex w-full">
-        {/* Table of Contents Sidebar */}
         <Sidebar
           chapters={CHAPTERS}
           currentChapterId={currentChapterId}
@@ -460,7 +491,6 @@ export default function App() {
           onUpdateGoal={handleUpdateDailyGoal}
         />
 
-        {/* Reading Main Content Area */}
         <main className="flex-1 lg:pl-80 w-full overflow-x-hidden min-h-[calc(100vh-4rem)]">
           <Reader
             chapter={currentChapter}
@@ -480,7 +510,6 @@ export default function App() {
         </main>
       </div>
 
-      {/* User Stats & Daily Reading Goal Tracker Modal */}
       <UserStatsModal
         isOpen={isStatsOpen}
         onClose={() => setIsStatsOpen(false)}
@@ -494,7 +523,6 @@ export default function App() {
         }}
       />
 
-      {/* Google Drive Cloud Hub Modal */}
       <GoogleDriveHubModal
         isOpen={isDriveOpen}
         onClose={() => setIsDriveOpen(false)}
@@ -505,7 +533,6 @@ export default function App() {
         caseStudies={caseStudies}
       />
 
-      {/* Validating a Business Idea: Actionable Checklist Modal */}
       <ValidationChecklistModal
         isOpen={isChecklistOpen}
         onClose={() => setIsChecklistOpen(false)}
@@ -519,7 +546,6 @@ export default function App() {
         }}
       />
 
-      {/* Startup Case Studies Dossier Modal */}
       <CaseStudiesModal
         isOpen={isCaseStudiesOpen}
         onClose={() => setIsCaseStudiesOpen(false)}
@@ -530,7 +556,6 @@ export default function App() {
         }}
       />
 
-      {/* Floating Audio Narrator Player */}
       <AudioPlayer
         textToRead={allParagraphsInCurrentChapter}
         currentParagraphIndex={currentAudioParagraphIndex}
@@ -540,7 +565,6 @@ export default function App() {
         onClose={() => setIsAudioOpen(false)}
       />
 
-      {/* Search Modal */}
       <SearchModal
         chapters={CHAPTERS}
         isOpen={isSearchOpen}
@@ -548,7 +572,6 @@ export default function App() {
         onSelectResult={(chapterId) => setCurrentChapterId(chapterId)}
       />
 
-      {/* Notes & Highlights Drawer */}
       <NotesDrawer
         highlights={highlights}
         chapters={CHAPTERS}
@@ -560,7 +583,6 @@ export default function App() {
         currentChapterId={currentChapterId}
       />
 
-      {/* AI Founder Mentor Modal */}
       <AIMentorModal
         chapter={currentChapter}
         isOpen={isAIMentorOpen}
@@ -575,7 +597,995 @@ export default function App() {
           });
         }}
       />
+
+      <FounderProfileModal
+        isOpen={isFounderProfileOpen}
+        initialProfile={founderProfile}
+        onClose={() => setIsFounderProfileOpen(false)}
+        onSave={(profile) => {
+          setFounderProfile(profile);
+          setIsFounderProfileOpen(false);
+        }}
+      />
     </div>
   );
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+n
+
+
+
+
+
+"}]}           // end of files list            is not valid JSON, because we accidentally included a giant stray string after the JSON. I need to fix the payload and resend. Let's carefully compose the final JSON content without the accidental trailing content.          
